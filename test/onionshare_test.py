@@ -11,6 +11,16 @@ def test_get_platform_returns_platform_system():
     onionshare.platform.system = lambda: 'Sega Saturn'
     assert get_platform() == 'Sega Saturn'
 
+def test_is_root_with_uid_zero():
+    "is_root returns true for uid 0"
+    onionshare.os.geteuid = lambda: 0
+    assert is_root()
+
+def test_is_not_root_with_other_uids():
+    "is_root returns true for other uids"
+    onionshare.os.geteuid = lambda: 1
+    assert is_root() == False
+
 class MockSubprocess():
   def __init__(self):
       self.last_call = None
@@ -67,6 +77,12 @@ def test_load_strings_loads_other_languages():
     load_strings("fr")
     assert onionshare.strings['calculating_sha1'] == "Calculer un hachage SHA-1."
 
+def test_load_strings_falls_back_to_english():
+    "load_strings() uses English strings if a language is not found"
+    locale.getdefaultlocale = lambda: ('pl_PL', 'UTF-8')
+    load_strings()
+    assert onionshare.strings == load_strings("en")
+
 def test_generate_slug_length():
     "generates a 32-character slug"
     assert len(slug) == 32
@@ -121,3 +137,15 @@ def test_filehash_returns_correct_size():
     _, filesize = file_crunching(tempfile)
 
     assert filesize == 50
+
+def test_set_file_info_changes_file_info():
+    "set_file_info() updates name, hash, and size."
+    assert onionshare.filename == None
+    assert onionshare.filehash == None
+    assert onionshare.filesize == None
+
+    set_file_info('filename', 'hash', 'size')
+
+    assert onionshare.filename == 'filename'
+    assert onionshare.filehash == 'hash'
+    assert onionshare.filesize == 'size'

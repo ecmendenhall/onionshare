@@ -109,13 +109,14 @@ def tails_close_port(port):
         print strings["closing_hole"]
         subprocess.call(['/sbin/iptables', '-I', 'OUTPUT', '-o', 'lo', '-p', 'tcp', '--dport', str(port), '-j', 'REJECT'])
 
-def load_strings(default="en"):
-    global strings
+
+def load_translations():
     try:
-        translated = json.loads(open('{0}/strings.json'.format(os.getcwd())).read())
+        return json.loads(open('{0}/strings.json'.format(os.getcwd())).read())
     except IOError:
-        translated = json.loads(open('{0}/strings.json'.format(onionshare_dir)).read())
-    strings = translated[default]
+        return json.loads(open('{0}/strings.json'.format(onionshare_dir)).read())
+
+def override_default_language(strings, translated, default):
     lc, enc = locale.getdefaultlocale()
     if lc:
         lang = lc[:2]
@@ -124,6 +125,14 @@ def load_strings(default="en"):
             for key in translated[default]:
                 if key in translated[lang]:
                     strings[key] = translated[lang][key]
+    return strings
+
+
+def load_strings(default="en"):
+    global strings
+    translated = load_translations()
+    strings = translated[default]
+    strings = override_default_language(strings, translated, default)
     return strings
 
 def file_crunching(filename):
