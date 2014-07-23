@@ -1,6 +1,9 @@
 import onionshare, webapp
 import os, sys, subprocess, inspect
 
+from onionshare.shared_file import SharedFile
+from onionshare.hidden_service import get_platform, is_root
+from webapp import WebApp
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
 from PyQt4.QtWebKit import *
@@ -9,19 +12,20 @@ window_icon = None
 
 class Application(QApplication):
     def __init__(self):
-        platform = onionshare.get_platform()
+        platform = get_platform()
         if platform == 'Tails' or platform == 'Linux':
             self.setAttribute(Qt.AA_X11InitThreads, True)
 
         QApplication.__init__(self, sys.argv)
 
 class WebAppThread(QThread):
-    def __init__(self, webapp_port):
+    def __init__(self, wbapp, webapp_port):
         QThread.__init__(self)
+        self.wbapp = wbapp
         self.webapp_port = webapp_port
 
     def run(self):
-        webapp.app.run(port=self.webapp_port)
+        self.wbapp.run(port=self.webapp_port)
 
 class Window(QWebView):
     def __init__(self, basename, webapp_port):
@@ -49,33 +53,32 @@ def select_file(strings):
         filename = sys.argv[1]
     else:
         args = {}
-        if onionshare.get_platform() == 'Tails':
+        if get_platform() == 'Tails':
             args['directory'] = '/home/amnesia'
 
-        filename = QFileDialog.getOpenFileName(caption=strings['choose_file'], options=QFileDialog.ReadOnly, **args)
+        filename = QFileDialog.getOpenFileName(caption=strings.get('choose_file'), options=QFileDialog.ReadOnly, **args)
         if not filename:
-            return False, False
+            return False
 
         filename = str(filename)
 
     # validate filename
     if not os.path.isfile(filename):
-        alert(strings["not_a_file"].format(filename), QMessageBox.Warning)
-        return False, False
+        alert(strings.get("not_a_file").format(filename), QMessageBox.Warning)
+        return False
 
     filename = os.path.abspath(filename)
-    basename = os.path.basename(filename)
-    return filename, basename
+    return SharedFile(filename)
 
 def main():
-    onionshare.strings = onionshare.load_strings()
+    strings = onionshare.Strings()
 
     # start the Qt app
     app = Application()
 
     # check for root in Tails
-    if onionshare.get_platform() == 'Tails' and not onionshare.is_root():
-        subprocess.call(['/usr/bin/gksudo']+sys.argv)
+    if get_platform() == 'Tails' and not is_root():
+        subprocess.call(['/usr/bin/gksudo'] + sys.argv)
         return
 
     # create the onionshare icon
@@ -84,41 +87,33 @@ def main():
     window_icon = QIcon("{0}/onionshare-icon.png".format(onionshare_gui_dir))
 
     # try starting hidden service
-    onionshare_port = onionshare.choose_port()
+    service = onionshare.HiddenService.build()
     try:
-        onion_host = onionshare.start_hidden_service(onionshare_port)
+       service.start()
     except onionshare.NoTor as e:
         alert(e.args[0], QMessageBox.Warning)
         return
-    onionshare.tails_open_port(onionshare_port)
 
     # select file to share
-    filename, basename = select_file(onionshare.strings)
-    if not filename:
+    shared_file = select_file(strings)
+    if not shared_file:
         return
 
     # initialize the web app
-    webapp.onionshare = onionshare
-    webapp.onionshare_port = onionshare_port
-    webapp.filename = filename
-    webapp.onion_host = onion_host
-    webapp.qtapp = app
-    webapp.clipboard = app.clipboard()
+    wbapp = WebApp.build(service, shared_file, app, strings)
 
     # run the web app in a new thread
-    webapp_port = onionshare.choose_port()
-    onionshare.tails_open_port(webapp_port)
-    webapp_thread = WebAppThread(webapp_port)
+    webapp_port = onionshare.hidden_service.choose_open_port()
+    webapp_thread = WebAppThread(wbapp, webapp_port)
     webapp_thread.start()
 
     # clean up when app quits
     def shutdown():
-        onionshare.tails_close_port(onionshare_port)
-        onionshare.tails_close_port(webapp_port)
+        service.shutdown()
     app.connect(app, SIGNAL("aboutToQuit()"), shutdown)
 
     # launch the window
-    web = Window(basename, webapp_port)
+    web = Window(shared_file.basename, webapp_port)
     web.show()
 
     # all done

@@ -1,93 +1,95 @@
 from flask import Flask, render_template
 import threading, json, os, time, platform, sys
+import onionshare.request_queue
+from onionshare.request_queue import RequestQueue
+from onionshare.strings import Strings
+from onionshare.file_server import FileServer
 
-onionshare = None
-onionshare_port = None
-filename = None
-onion_host = None
-qtapp = None
-clipboard = None
+def get_temp_dir():
+    # figure out this platform's temp dir
+    if platform.system() == 'Windows':
+        return os.environ['Temp'].replace('\\', '/')
+    else:
+        return '/tmp/'
 
-url = None
+temp_dir = get_temp_dir()
 
-# figure out this platform's temp dir
-if platform.system() == 'Windows':
-    temp_dir = os.environ['Temp'].replace('\\', '/')
-else:
-    temp_dir = '/tmp/'
+def suppress_output():
+    # suppress output in windows
+    if platform.system() == 'Windows':
+        sys.stdout = open('{0}/onionshare.stdout.log'.format(temp_dir), 'w')
+        sys.stderr = open('{0}/onionshare.stderr.log'.format(temp_dir), 'w')
 
-# suppress output in windows
-if platform.system() == 'Windows':
-    sys.stdout = open('{0}/onionshare.stdout.log'.format(temp_dir), 'w')
-    sys.stderr = open('{0}/onionshare.stderr.log'.format(temp_dir), 'w')
+suppress_output()
 
 # log web errors to file
 import logging
 log_handler = logging.FileHandler('{0}/onionshare.web.log'.format(temp_dir))
 log_handler.setLevel(logging.WARNING)
 
-app = Flask(__name__, template_folder='./templates')
-app.logger.addHandler(log_handler)
+class WebApp:
 
-@app.route("/")
-def index():
-    return render_template('index.html')
+    @classmethod
+    def build(self, hidden_service, shared_file, qtapp):
+        strings = Strings()
+        clipboard = qtapp.clipboard()
 
-@app.route("/init_info")
-def init_info():
-    global onionshare, filename
-    basename = os.path.basename(filename)
+        app = Flask(__name__, template_folder='./templates')
+        app.logger.addHandler(log_handler)
 
-    return json.dumps({
-        'strings': onionshare.strings,
-        'basename': basename
-    })
+        url = 'http://{0}/{1}'.format(hidden_service.host, shared_file.slug)
+        requestq = RequestQueue()
+        os_app = FileServer.build(shared_file, requestq)
 
-@app.route("/start_onionshare")
-def start_onionshare():
-    global onionshare, onionshare_port, filename, onion_host, url
+        @app.route("/")
+        def index():
+            return render_template('index.html')
 
-    url = 'http://{0}/{1}'.format(onion_host, onionshare.slug)
+        @app.route("/init_info")
+        def init_info():
+            return json.dumps({
+                'strings': strings.strings,
+                'basename': shared_file.basename
+            })
 
-    filehash, filesize = onionshare.file_crunching(filename)
-    onionshare.set_file_info(filename, filehash, filesize)
+        @app.route("/start_onionshare")
+        def start_onionshare():
 
-    # start onionshare service in new thread
-    t = threading.Thread(target=onionshare.app.run, kwargs={'port': onionshare_port})
-    t.daemon = True
-    t.start()
+            # start onionshare service in new thread
+            print hidden_service.host + '/' + shared_file.slug
+            t = threading.Thread(target=os_app.run, kwargs={'port': hidden_service.port})
+            t.daemon = True
+            t.start()
 
-    return json.dumps({
-        'filehash': filehash,
-        'filesize': filesize,
-        'url': url
-    })
+            return json.dumps({
+                'filehash': shared_file.filehash,
+                'filesize': shared_file.filesize,
+                'url': url
+            })
 
-@app.route("/copy_url")
-def copy_url():
-    global clipboard
-    clipboard.setText(url)
-    return ''
+        @app.route("/copy_url")
+        def copy_url():
+            clipboard.setText(url)
+            return ''
 
-@app.route("/heartbeat")
-def check_for_requests():
-    global onionshare
-    events = []
+        @app.route("/heartbeat")
+        def check_for_requests():
+            events = []
 
-    done = False
-    while not done:
-        try:
-            r = onionshare.q.get(False)
-            events.append(r)
-        except onionshare.Queue.Empty:
-            done = True
+            done = False
+            while not done:
+                try:
+                    r = requestq.q.get(False)
+                    events.append(r)
+                except onionshare.request_queue.Queue.Empty:
+                    done = True
 
-    return json.dumps(events)
+            return json.dumps(events)
 
-@app.route("/close")
-def close():
-    global qtapp
-    time.sleep(1)
-    qtapp.closeAllWindows()
-    return ''
+        @app.route("/close")
+        def close():
+            time.sleep(1)
+            qtapp.closeAllWindows()
+            return ''
 
+        return app
