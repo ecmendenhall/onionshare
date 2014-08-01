@@ -15,15 +15,23 @@ class MockSubprocess:
 
 class MockController:
 
+    return_none = False
+
     @classmethod
     def from_port(self, port):
-        return 'controller'
+        if self.return_none:
+            return None
+        else:
+            return MockController()
 
     def set_options(self, args):
         self.options = args
 
     def get_options(self):
         return self.options
+
+    def authenticate(self):
+        self.authenticated = True
 
 class HiddenServiceTests(unittest.TestCase):
 
@@ -69,7 +77,7 @@ class HiddenServiceTests(unittest.TestCase):
         service = HiddenService.build()
         stem.control.Controller = MockController
         service._try_controlport(9051)
-        assert service.controller == 'controller'
+        assert type(service.controller) == MockController
 
     def test_try_controlport(self):
         "HiddenService._try_controlport() returns None when it throws an error"
@@ -171,3 +179,27 @@ class HiddenServiceTests(unittest.TestCase):
         service.port = 'port'
         service.start()
         assert service.host == '127.0.0.1:port'
+
+    def test_connecting_to_tor_controlport_creates_controller(self):
+        "Connecting to the tor controlport creates a controller if one is not defined"
+        service = HiddenService.build()
+        stem.control.Controller = MockController
+        service._connect_to_tor_controlport()
+        assert isinstance(service.controller, MockController)
+
+    def test_failed_connection_to_tor_controlport_exits(self):
+        service = HiddenService.build()
+        MockController.return_none = True
+        stem.control.Controller = MockController()
+        self.assertRaises(SystemExit, service._connect_to_tor_controlport)
+
+    def test_connecting_to_tor_controlport_authenticates(self):
+        "Connecting to the tor controlport calls authenticate()"
+        service = HiddenService.build()
+        service.controller = MockController()
+        service._connect_to_tor_controlport()
+        assert service.controller.authenticated
+
+
+
+
